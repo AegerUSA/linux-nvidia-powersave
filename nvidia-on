@@ -1,0 +1,81 @@
+#!/bin/bash
+
+# *NOTES*
+# - This script has only been tested with Wayland
+# - To verify changes, run: cat /sys/class/drm/card1/device/power_state
+#   This should return "D0", indicating the GPU is powered on.
+# - While this script works with my setup, this script modifies system files,
+#   has no warranty, and must be run at your own risk.
+
+
+# Restore NVIDIA EGL vendor configuration
+nvidia_config_path="/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+nvidia_config='{
+    "file_format_version": "1.0.0",
+    "ICD": {
+        "library_path": "libEGL_nvidia.so.0"
+    }
+}'
+
+if [ ! -f "$nvidia_config_path" ]; then
+    if echo -n "$nvidia_config" | sudo tee "$nvidia_config_path" > /dev/null; then
+        echo "Restored NVIDIA EGL vendor configuration."
+    else
+        echo "Error: Failed to restore NVIDIA EGL vendor configuration. Please check permissions."
+        exit 1
+    fi
+else
+    echo "NVIDIA EGL vendor configuration already exists. Skipping."
+fi
+
+# Backup GRUB configuration
+grub_file="/etc/default/grub"
+backup_file="${grub_file}.bak"
+
+if [ ! -f "$backup_file" ]; then
+    sudo cp "$grub_file" "$backup_file"
+    echo "Backed up GRUB configuration to $backup_file."
+else
+    echo "Backup already exists at $backup_file. Skipping backup creation."
+fi
+
+# Check if nvidia-drm.modeset=0 has already been removed
+nvidia_modeset_string="nvidia-drm.modeset=0"
+current_grub_line="$(grep ^GRUB_CMDLINE_LINUX $grub_file | grep -v GRUB_CMDLINE_LINUX_DEFAULT)"
+
+if echo "$current_grub_line" | grep -q "$nvidia_modeset_string"; then
+    # Remove nvidia-drm.modeset=0 from GRUB_CMDLINE_LINUX
+    new_grub_line="$(echo "$current_grub_line" | sed -E "s/(^| )$nvidia_modeset_string//")"
+    sudo sed -i "s|$current_grub_line|$new_grub_line|" "$grub_file"
+    echo "Removed $nvidia_modeset_string to GRUB_CMDLINE_LINUX."
+
+    if grep -q "$nvidia_modeset_string" "$grub_file"; then
+        echo "Error: Failed to update GRUB configuration. Restoring backup."
+        sudo cp "$backup_file" "$grub_file"
+        exit 1
+    else
+        echo "GRUB configuration updated successfully. Applying changes with update-grub..."
+        if sudo update-grub; then
+            echo "GRUB updated successfully."
+        else
+            echo "Error: update-grub failed. Restoring original configuration."
+            sudo cp "$backup_file" "$grub_file"
+            sudo update-grub
+            echo "Restored original GRUB configuration. Please investigate the issue."
+            exit 1
+        fi
+    fi
+
+    # Prompt for reboot
+    read -p "Reboot required to apply changes. Reboot now? (y/n): " choice
+    if [[ "$choice" =~ ^[Yy]$ ]]; then
+        sudo reboot
+    else
+        echo "Reboot canceled. Please reboot manually to apply changes."
+    fi
+
+else
+    echo "GRUB configuration already has $nvidia_modeset_string removed."
+    echo "Reboot manually if needed to apply changes."
+fi
+

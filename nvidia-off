@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# *NOTES*
+# - This script has only been tested with Wayland
+# - To verify changes, run: cat /sys/class/drm/card1/device/power_state
+#   This should return "D3cold", assuming your laptop is unplugged.
+# - If you cannot achieve a "D3cold" power state, this means a background
+#   graphical application may be forcing a higher state. The GNOME remote
+#   desktop has been known to cause this issue (disable under Settings ->
+#   Sharing -> Remote Desktop).
+# - While this script works with my setup, this script modifies system files,
+#   has no warranty, and must be run at your own risk.
+
+
+# Remove the NVIDIA EGL vendor configuration to ensure that the system
+# ignores NVIDIA's rendering libraries when the GPU is toggled off
+nvidia_config_path="/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+if [ -f "$nvidia_config_path" ]; then
+    sudo rm -rf "$nvidia_config_path"
+    echo "Removed NVIDIA EGL vendor configuration."
+else
+    echo "NVIDIA EGL vendor configuration not found. Skipping."
+fi
+
+# Backup GRUB configuration
+grub_file="/etc/default/grub"
+backup_file="${grub_file}.bak"
+sudo cp "$grub_file" "$backup_file"
+echo "Backed up GRUB configuration to $backup_file."
+
+# Check if nvidia-drm.modeset=0 is already present
+nvidia_modeset_string="nvidia-drm.modeset=0"
+current_grub_line="$(grep ^GRUB_CMDLINE_LINUX $grub_file | grep -v GRUB_CMDLINE_LINUX_DEFAULT)"
+if ! echo "$current_grub_line" | grep -q "$nvidia_modeset_string"; then
+    new_grub_line="$(echo "$current_grub_line" | sed 's/\"$/ /')$nvidia_modeset_string\""
+    sudo sed -i "s|$current_grub_line|$new_grub_line|" "$grub_file"
+    if ! grep -q "$nvidia_modeset_string" "$grub_file"; then
+        echo "Error: Failed to update GRUB configuration. Restoring backup."
+        sudo cp "$backup_file" "$grub_file"
+        exit 1
+    else
+        echo "Added $nvidia_modeset_string to GRUB_CMDLINE_LINUX."
+    fi
+    sudo update-grub || { echo "Error: update-grub failed. Restoring original GRUB configuration."; sudo cp "$backup_file" "$grub_file"; exit 1; }
+else
+    echo "GRUB already configured with $nvidia_modeset_string."
+fi
+
+# Modify /usr/lib/udev/rules.d/61-gdm.rules to enable Wayland with modeset disabled
+udev_rules_file="/usr/lib/udev/rules.d/61-gdm.rules"
+udev_backup_file="${udev_rules_file}.bak"
+sudo cp "$udev_rules_file" "$udev_backup_file"
+echo "Backed up $udev_rules_file to $udev_backup_file."
+
+# Comment out the line that disables Wayland if nvidia-drm.modeset=0 is set
+if sudo grep -qE '^ATTR\{parameters/modeset\}!="Y", GOTO="gdm_disable_wayland"' "$udev_rules_file"; then
+    sudo sed -i 's|^ATTR{parameters/modeset}!="Y", GOTO="gdm_disable_wayland"|# &|' "$udev_rules_file"
+    echo "Commented out Wayland disabling rule in $udev_rules_file."
+else
+    echo "Wayland disabling rule already commented out or not present. Skipping."
+fi
+
+# Prompt for reboot
+read -p "Reboot required to apply changes. Reboot now? (y/n): " choice
+if [[ "$choice" =~ ^[Yy]$ ]]; then
+    sudo reboot
+else
+    echo "Reboot canceled. Please reboot manually to apply changes."
+fi
