@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # *NOTES*
-# - This script has only been tested with Wayland
 # - To verify changes, run: cat /sys/class/drm/card1/device/power_state
 #   This should return "D0", indicating the GPU is powered on.
 # - While this script works with my setup, this script modifies system files,
