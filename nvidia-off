@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # *NOTES*
-# - This script has only been tested with Wayland
+# - This script only works with Wayland
 # - To verify changes, run: cat /sys/class/drm/card1/device/power_state
 #   This should return "D3cold", assuming your laptop is unplugged.
 # - If you cannot achieve a "D3cold" power state, this means a background
